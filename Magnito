@@ -1,0 +1,177 @@
+// main.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:web3dart/web3dart.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+void main() {
+  runApp(MagnitoWalletApp());
+}
+
+class MagnitoWalletApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Magnito Wallet',
+      theme: ThemeData(
+        primarySwatch: Colors.green,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
+      ),
+      home: MagnitoHomePage(),
+    );
+  }
+}
+
+class MagnitoHomePage extends StatefulWidget {
+  @override
+  _MagnitoHomePageState createState() => _MagnitoHomePageState();
+}
+
+class _MagnitoHomePageState extends State<MagnitoHomePage> {
+  final LocalAuthentication _localAuth = LocalAuthentication();
+  final FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+  String _walletAddress = '';
+  String _balance = '';
+  bool _isAuthenticated = false;
+  String _earthquakeData = '';
+
+  // Web3 Dart client and credentials
+  Web3Client? _web3Client;
+  EthereumAddress? _myAddress;
+  Credentials? _credentials;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBiometricAuthentication();
+    _loadWalletData();
+    _fetchEarthquakeData();
+    _initializeWeb3();
+  }
+
+  // Initialize Web3 Client (using Infura)
+  void _initializeWeb3() {
+    final infuraUrl = 'https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID';
+    _web3Client = Web3Client(infuraUrl, http.Client());
+  }
+
+  // Biometric Authentication
+  Future<void> _checkBiometricAuthentication() async {
+    bool canCheckBiometrics = await _localAuth.canCheckBiometrics;
+    if (canCheckBiometrics) {
+      _authenticateWithBiometrics();
+    }
+  }
+
+  Future<void> _authenticateWithBiometrics() async {
+    bool authenticated = await _localAuth.authenticate(
+      localizedReason: 'Please authenticate to access your wallet',
+      options: AuthenticationOptions(biometricOnly: true),
+    );
+    setState(() {
+      _isAuthenticated = authenticated;
+    });
+  }
+
+  // Load Wallet Data (Dummy)
+  Future<void> _loadWalletData() async {
+    String walletAddress = await _secureStorage.read(key: 'walletAddress') ?? '';
+    String balance = await _secureStorage.read(key: 'balance') ?? '0.0';
+
+    setState(() {
+      _walletAddress = walletAddress;
+      _balance = balance;
+    });
+  }
+
+  // Fetch Earthquake Data
+  Future<void> _fetchEarthquakeData() async {
+    final response = await http.get(Uri.parse('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson'));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      setState(() {
+        _earthquakeData = data['features'].toString();
+      });
+    } else {
+      throw Exception('Failed to load earthquake data');
+    }
+  }
+
+  // Web3 Integration - Send Transaction
+  Future<void> _sendTransaction() async {
+    try {
+      final senderAddress = EthereumAddress.fromHex(_walletAddress); // from wallet
+      final toAddress = EthereumAddress.fromHex('0xRecipientAddress');
+      final amount = EtherAmount.fromUnitAndValue(EtherUnit.ether, 0.1); // 0.1 ETH
+
+      final transaction = Transaction(
+        to: toAddress,
+        gasPrice: EtherAmount.inWei(BigInt.from(10000000000)),
+        maxGas: 100000,
+        value: amount,
+      );
+
+      // Load credentials using private key (stored securely)
+      String privateKey = await _secureStorage.read(key: 'privateKey') ?? '';
+      _credentials = await _web3Client!.credentialsFromPrivateKey(privateKey);
+
+      // Send the transaction
+      await _web3Client!.sendTransaction(
+        _credentials!,
+        transaction,
+        chainId: 1, // Mainnet
+      );
+      print("Transaction sent successfully!");
+    } catch (e) {
+      print("Error sending transaction: $e");
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Magnito Wallet'),
+        actions: [
+          if (_isAuthenticated)
+            IconButton(
+              icon: Icon(Icons.exit_to_app),
+              onPressed: () {
+                setState(() {
+                  _isAuthenticated = false;
+                });
+              },
+            )
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!_isAuthenticated)
+              ElevatedButton(
+                onPressed: _authenticateWithBiometrics,
+                child: Text('Authenticate with Biometrics'),
+              ),
+            if (_isAuthenticated) ...[
+              Text('Wallet Address: $_walletAddress'),
+              Text('Balance: $_balance ETH'),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _sendTransaction,
+                child: Text('Send Transaction'),
+              ),
+              SizedBox(height: 20),
+              Text('Recent Earthquake Data:'),
+              Text(_earthquakeData),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
